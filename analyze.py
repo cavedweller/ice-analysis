@@ -3,6 +3,7 @@ import sys
 import datetime
 import re
 import argparse
+import json
 
 
 HDRS = []
@@ -18,16 +19,16 @@ def addr2int(addr):
 def match_prefix(addr, pref, len):
     addr_int = addr2int(addr)
     pref_int = addr2int(pref)
-    
+
     mask_int = 0
     for i in range(0,32):
         mask_int <<= 1
         if (i < len):
             mask_int |= 1
-            
+
     if (addr_int & mask_int) == pref_int:
         return True
-    
+
     return False
 
 class Candidate(object):
@@ -38,7 +39,7 @@ class Candidate(object):
         label = v.pop(0)
         if label != "a=candidate" and label != "candidate":
             die("Not a candidate: %s"%c)
-            
+
         self.index_ = int(v.pop(0))
         self.component_ = int(v.pop(0))
         self.transport_ = v.pop(0)
@@ -61,10 +62,10 @@ class Candidate(object):
             return False
 
         return True
-                          
+
     def __str__(self):
         return "%s: %s"%(self.time_, self.txt_)
-        
+
 class Event(object):
     def __init__(self, v):
         self.val_ = v['sdp']
@@ -77,7 +78,7 @@ class Event(object):
         dd = d.split(".")
         e = datetime.datetime.utcfromtimestamp(0)
         return (datetime.datetime.strptime(dd[0], "%Y-%m-%d %H:%M:%S") - e).total_seconds()
-    
+
 class Call(object):
     def __init__(self, callid):
         self.failed_ = None
@@ -98,7 +99,7 @@ class Call(object):
             self.add_answer(vv)
         if v['type'] == "candidate":
             self.add_candidate(vv)
-    
+
     def add_offer(self, val):
         if self.offer_ is not None:
             die("Can't have multiple offers")
@@ -118,7 +119,7 @@ class Call(object):
             if l.find("a=candidate") != -1:
                 self.offer_candidates_.append(Candidate(self.offer_.time_, l))
 
-        self.answer_candidates_=[]            
+        self.answer_candidates_=[]
         for l in self.answer_.val_:
             if l.find("a=candidate") != -1:
                 self.answer_candidates_.append(Candidate(self.answer_.time_, l))
@@ -146,7 +147,7 @@ class Call(object):
             if len(RES) > 0:
                 RES[-1].append(l)
         return RES
-            
+
     def expand(self):
         self.expanded_offer_ = self.break_up_by_m_lines(self.offer_.val_)
         self.expanded_answer_ = self.break_up_by_m_lines(self.answer_.val_)
@@ -168,7 +169,7 @@ class Call(object):
 
     def expected_components(self):
         return self.accepted_ * 2
-    
+
     def failed(self, reason, extra=None):
         ex = ""
         if extra is not None:
@@ -219,20 +220,20 @@ class Call(object):
         for c in self.answer_candidates_:
             if c.is_public():
                 public += 1
-        
+
         if (public < self.expected_components()):
             self.failed('too_few_public_candidates',
                         "%d < %d"%(public, self.expected_components()))
-        
+
 def die(msg):
     sys.stderr.write(msg)
     sys.stderr.write("\n")
     sys.exit(1)
-    
+
 def strip_quotes(lst):
     return [x.strip('" ') for x in lst]
 
-def parse_file(inf):
+def parse_file_tokbox(inf):
     global HDRS
     l = inf.readline()
     l = l.strip()
@@ -244,7 +245,6 @@ def parse_file(inf):
         if len(ll) != len(HDRS):
             die("Bogus length")
 
-        
         val = {}
         for i in range(0,len(ll)):
             val[HDRS[i]] = ll[i]
@@ -254,34 +254,77 @@ def parse_file(inf):
             CALLS[val['callid']] = Call(val['callid'])
 
         CALLS[val['callid']].add_value(val)
-        
-parser = argparse.ArgumentParser()
-parser.add_argument('file')
-parser.add_argument('--unknown', dest="unknowns", default=None, help="Dump unknown calls")
-args = parser.parse_args()
 
-f = open(args.file)
-parse_file(f)
+def parse_file_telemetry(inf):
+    global HDRS
+    for l in inf:
+        line = l.strip()
+        j = json.loads(line[37:])
 
-for callid in CALLS:
-    CALLS[callid].analyze()
+        val = dict()
+#        for hdr in j.keys():
+#            val[hdr] = j[hdr]
+
+        callid = str(line[:36])
+
+        val['sdp'] = j['localSdp'].split("\\r\\n")
+        if len(j['localSdp'].split('\\r\\n')) > len(j['remoteSdp'].split('\\r\\n')):
+            val['type'] = 'offer'
+        else:
+            val['type'] = 'response'
+
+        val['date'] = '1993-06-08 07:49:31.805'
+
+        if not callid in CALLS:
+            CALLS[callid] = Call(callid)
+
+        CALLS[callid].add_value(val)
+
+        val['sdp'] = j['remoteSdp'].split("\\r\\n")
+        if val['type'] == 'offer':
+            val['type'] = 'response'
+        else:
+            val['type'] = 'offer'
+
+        CALLS[callid].add_value(val)
 
 
-print "Total calls: %d"%len(CALLS.keys())
-for r in FAILURES_BY_REASON:
-    print "%s: %d"%(r, len(FAILURES_BY_REASON[r]))
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('file')
+    parser.add_argument('--source', default='tokbox', help="tokbox or telemetry")
+    parser.add_argument('--unknown', dest="unknowns", default=None, help="Dump unknown calls")
+    args = parser.parse_args()
 
-print "WARNINGS"
-for r in WARNINGS_BY_REASON:
-    print "%s: %d"%(r, len(WARNINGS_BY_REASON[r]))
+    f = open(args.file)
+    if args.source == 'tokbox':
+        parse_file_tokbox(f)
+    elif args.source == 'telemetry':
+        parse_file_telemetry(f)
+    else:
+        die('bad source type')
 
-print "STATS"
-for r in STATS_BY_REASON:
-    print "%s: %d"%(r, len(STATS_BY_REASON[r]))
+    for callid in CALLS:
+        CALLS[callid].analyze()
 
-if args.unknowns is not None:
-    u = open(args.unknowns, "w")
-    for call in CALLS:
-        if CALLS[call].failed_ is None:
-            CALLS[call].dump(u)
-        
+
+    print "Total calls: %d"%len(CALLS.keys())
+    for r in FAILURES_BY_REASON:
+        print "%s: %d"%(r, len(FAILURES_BY_REASON[r]))
+
+    print "WARNINGS"
+    for r in WARNINGS_BY_REASON:
+        print "%s: %d"%(r, len(WARNINGS_BY_REASON[r]))
+
+    print "STATS"
+    for r in STATS_BY_REASON:
+        print "%s: %d"%(r, len(STATS_BY_REASON[r]))
+
+    if args.unknowns is not None:
+        u = open(args.unknowns, "w")
+        for call in CALLS:
+            if CALLS[call].failed_ is None:
+                CALLS[call].dump(u)
+
+if __name__ == '__main__':
+    main()
