@@ -49,7 +49,7 @@ class RelevantData(threading.Thread):
       lz = lzma.decompress(keyContents, format=lzma.FORMAT_ALONE)
 
       for line in lz.split('\n'):
-        if line != '': 
+        if line != '':
             self.outqueue.put(line)
       self.inqueue.task_done()
 
@@ -75,7 +75,7 @@ class Job:
     start = datetime.now()
     count = 0
     for f in self.list_partitions(bucket, include_keys=True):
-      self.fetch_and_sanatize(f)
+      self.fetch_and_sanitize(f)
       count += 1
       out_files.append(f)
     conn.close()
@@ -104,7 +104,7 @@ class Job:
                   for prefix in self.list_partitions(bucket, k.name, level + 1, include_keys):
                       yield prefix
 
-  def fetch_and_sanatize(self, fin):
+  def fetch_and_sanitize(self, fin):
     inqueue.put(fin)
     # TODO stores data in a Platform/measurment/day setup
     pass

@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import sys
 import datetime
+import time
 import re
 import argparse
 import json
@@ -35,7 +36,7 @@ class Candidate(object):
     def __init__(self, t, c):
         self.time_ = t
         self.txt_ = c;
-        v = c.split()
+        v = re.split(' |\:', c)
         label = v.pop(0)
         if label != "a=candidate" and label != "candidate":
             die("Not a candidate: %s"%c)
@@ -255,37 +256,44 @@ def parse_file_tokbox(inf):
 
         CALLS[val['callid']].add_value(val)
 
+def rtpmap_count(string):
+    #print(string.replace('\\r\\n', '\n'))
+    arr = string.split('\\r\\n')
+    arr = filter(lambda x:
+            x.split(':')[0] == 'a=rtpmap', arr)
+    return len(arr)
+
 def parse_file_telemetry(inf):
-    global HDRS
     for l in inf:
         line = l.strip()
-        j = json.loads(line[37:])
+        j = json.loads(line.split('\t')[1])
 
+        # TODO: fix no data in file
+        timestamp = str(datetime.datetime.today())
+
+        # first value of every entry, unique from telemetry infrastructure
+        callid = line.split('\t')[0]
+        CALLS[callid] = Call(callid)
+
+        # The first part of the call
         val = dict()
-#        for hdr in j.keys():
-#            val[hdr] = j[hdr]
-
-        callid = str(line[:36])
-
         val['sdp'] = j['localSdp'].split("\\r\\n")
-        if len(j['localSdp'].split('\\r\\n')) > len(j['remoteSdp'].split('\\r\\n')):
+        val['date'] = timestamp
+
+        if rtpmap_count(j['localSdp']) > rtpmap_count(j['remoteSdp']):
             val['type'] = 'offer'
         else:
-            val['type'] = 'response'
-
-        val['date'] = '1993-06-08 07:49:31.805'
-
-        if not callid in CALLS:
-            CALLS[callid] = Call(callid)
-
+            val['type'] = 'answer'
         CALLS[callid].add_value(val)
 
+        # the second part
+        val = dict()
         val['sdp'] = j['remoteSdp'].split("\\r\\n")
-        if val['type'] == 'offer':
-            val['type'] = 'response'
-        else:
+        val['date'] = timestamp
+        if rtpmap_count(j['remoteSdp']) > rtpmap_count(j['localSdp']):
             val['type'] = 'offer'
-
+        else:
+            val['type'] = 'answer'
         CALLS[callid].add_value(val)
 
 
